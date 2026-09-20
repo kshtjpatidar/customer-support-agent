@@ -1,43 +1,7 @@
-# Project Reflection — Customer Support AI Agent
+# Customer Support Agent Reflection
 
-## Design Decision: MemoryHook with Dual-Strategy Namespace Retrieval
+For the implementation of the Customer Support Agent, I chose to integrate the AgentCore Memory client directly into the Strands HookProvider via the `MemoryHook` class. This architectural decision ensures that state management is decoupled from the core business logic of the agent. By hooking into `MessageAddedEvent` and `AfterInvocationEvent`, the system automatically prepends historical context to user prompts before they reach the model and persists the plain-text dialogue after the invocation completes. This keeps the agent’s core tool definitions clean and focused solely on executing specific tasks, while cross-session memory operates transparently in the background as a cross-cutting concern.
 
-One specific design choice I made was in the `MemoryHook` class, particularly in how
-`retrieve_customer_context` retrieves memories before each user turn. Rather than
-hard-coding a single namespace, I designed `get_namespaces()` to call
-`get_memory_strategies()` at startup and return a live map of all configured strategies
-(e.g., `SEMANTIC → cs_agent/{actorId}/facts` and `USER_PREFERENCE → cs_agent/{actorId}/preferences`).
-This means the hook automatically adapts to whatever strategies were provisioned in the
-AgentCore Memory console, making it portable and forward-compatible. The tradeoff is a
-small startup latency hit, but since namespaces are fetched once per session and cached as
-`self.namespaces`, this is negligible in practice. The alternative — hard-coding namespace
-strings — would have been brittle and required code changes any time a Memory strategy was
-added, renamed, or restructured.
+One significant challenge I encountered was correctly filtering tool-result messages from the interaction history when saving events to memory. Initially, the agent treated tool execution results as standard user input, which polluted the memory store with raw JSON and internal system outputs. I resolved this by adding a strict filtering mechanism inside `save_support_interaction` that scans the content blocks and explicitly skips any message containing a `toolResult` type, ensuring that only the actual human customer queries and assistant responses are persisted.
 
-## Challenge Encountered: Memory SDK API Field Name Variance
-
-The most concrete challenge I encountered was reconciling the field name differences between
-versions of the `bedrock-agentcore` SDK. The SDK documentation and some examples used
-`"namespaces"` as the field name on each strategy object, while newer releases and some
-service API responses returned `"namespaceTemplates"` instead. A naïve implementation that
-only checked one field caused a silent empty-dict return, which meant memory retrieval never
-ran and cross-session recall silently failed during testing. I resolved this by adding a
-defensive fallback: `strategy.get("namespaceTemplates") or strategy.get("namespaces", [])`,
-which checks the new field first and gracefully falls back to the legacy field. I verified
-the fix by asserting that `self.namespaces` was non-empty after `MemoryHook.__init__()` and
-tracing the retrieval calls in the logs.
-
-## Production Consideration: Cost and LLM Provider Resilience
-
-The most pressing production concern for an agent of this type is **cost and availability
-of the LLM provider**. Because every customer turn involves at least one model invocation —
-and often two or three when tool calls are involved — the cost per session scales directly
-with model verbosity and tool chain depth. In a production system I would address this
-through: (a) a per-session token budget enforced in the system prompt and checked
-pre-invocation; (b) routing simple FAQ queries to a lighter model tier (e.g., Nova Lite
-versus a larger model) identified via a classifier; and (c) a provider failover pattern
-where a secondary LLM provider is configured so the agent degrades gracefully rather than
-returning an error if the primary provider is experiencing an outage. The fallback path I
-implemented in `calculate_loyalty_discount()` — which computes a tier-only discount when the
-Code Interpreter is unavailable — demonstrates the same principle applied at the tool level:
-always prefer graceful degradation over silent failure.
+From a production standpoint, robust error handling and timeouts are critical for external integrations like the MCP Gateway. In my implementation, I wrapped the Gateway tool discovery in a 10-second `asyncio.wait_for` timeout. In a live environment, if the Gateway becomes unresponsive due to network partitions or backend latency, the agent degrades gracefully by skipping the Gateway tools rather than hanging indefinitely, ensuring continuous availability for its core functions.
