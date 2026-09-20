@@ -495,16 +495,24 @@ async def invoke(payload, context=None):
         #    (order-tracking and refund-processing capabilities)
         if GATEWAY_URL and GATEWAY_URL not in ("<gateway_url>", ""):
             try:
-                mcp_client = MCPClient(
-                    lambda: streamable_http_client(GATEWAY_URL)
-                )
-                with mcp_client:
-                    gateway_tools = mcp_client.list_tools_sync()
-                    tools.extend(gateway_tools)
-                    logger.info(
-                        f"Loaded {len(gateway_tools)} Gateway tool(s): "
-                        f"{[t.name for t in gateway_tools]}"
+                async def _load_gateway_tools():
+                    mcp_client = MCPClient(
+                        lambda: streamable_http_client(GATEWAY_URL)
                     )
+                    with mcp_client:
+                        return mcp_client.list_tools_sync()
+
+                gateway_tools = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, lambda: _load_gateway_tools_sync()),
+                    timeout=10.0
+                )
+                tools.extend(gateway_tools)
+                logger.info(
+                    f"Loaded {len(gateway_tools)} Gateway tool(s): "
+                    f"{[t.name for t in gateway_tools]}"
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Gateway connection timed out after 10s — continuing without it")
             except Exception as exc:
                 logger.warning(f"Gateway unavailable — continuing without it: {exc}")
 
@@ -578,7 +586,24 @@ def main():
     print(response)
 
 
+def _load_gateway_tools_sync():
+    """Synchronous wrapper for loading gateway tools (used with run_in_executor)."""
+    try:
+        mcp_client = MCPClient(
+            lambda: streamable_http_client(GATEWAY_URL)
+        )
+        with mcp_client:
+            return mcp_client.list_tools_sync()
+    except Exception:
+        return []
+
+
 if __name__ == "__main__":
-    app.run()
-    # Uncomment the line below and comment app.run() for local CLI testing:
-    # main()
+    # Use main() for local CLI testing:
+    #   uv run main.py '{"prompt": "Hello", "customer_id": "CUST-123", "session_id": "s1"}'
+    # Use app.run() when deployed to AgentCore Runtime.
+    import sys
+    if len(sys.argv) > 1:
+        main()   # CLI mode — payload passed as argument
+    else:
+        app.run()  # Server mode — used by AgentCore deployment
