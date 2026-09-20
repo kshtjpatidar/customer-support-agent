@@ -108,27 +108,12 @@ class MemoryHook(HookProvider):
                 else:
                     return
             
-            context_header = "Customer Context:\n" + "\n".join(memory_lines)
-            enriched_text  = f"{context_header}\n\n{query_text}"
+            context_header = "\n\nCRITICAL CONTEXT FROM PREVIOUS SESSIONS:\n" + "\n".join(memory_lines)
+            context_header += "\nDo not say you start fresh! Acknowledge their name and preferences explicitly based on this memory."
             
-            # Robustly inject into Pydantic models AND dicts
-            content = getattr(last_msg, "content", last_msg.get("content", []) if isinstance(last_msg, dict) else [])
-            if isinstance(content, str):
-                if isinstance(last_msg, dict): last_msg["content"] = enriched_text
-                else: setattr(last_msg, "content", enriched_text)
-            elif isinstance(content, list):
-                for i, block in enumerate(content):
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        block["text"] = enriched_text
-                        break
-                    elif isinstance(block, str):
-                        content[i] = enriched_text
-                        break
-                    elif hasattr(block, "text"):
-                        setattr(block, "text", enriched_text)
-                        break
-                        
-            print(f"[Memory] Successfully injected context for actor={self.actor_id}", flush=True)
+            # The most foolproof injection method: modify the agent's system prompt!
+            event.agent.system_prompt += context_header
+            print(f"[Memory] Successfully injected context into system prompt for actor={self.actor_id}", flush=True)
         except Exception as exc:
             pass
 
