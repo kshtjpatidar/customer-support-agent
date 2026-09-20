@@ -44,6 +44,31 @@ def get_namespaces(mem_client: MemoryClient, memory_id: str) -> Dict:
         logger.warning(f"get_namespaces failed: {exc}")
         return {}
 
+def extract_text_from_message(msg):
+    # Safely extracts pure text from a strands message
+    try:
+        if not isinstance(msg, dict):
+            if hasattr(msg, "model_dump"): msg = msg.model_dump()
+            elif hasattr(msg, "__dict__"): msg = msg.__dict__
+            else: return str(msg)
+            
+        content = msg.get("content", [])
+        if isinstance(content, str): return content
+        
+        texts = []
+        for block in content:
+            if isinstance(block, dict):
+                # Ignore tool results to get the raw user prompt
+                if block.get("type") in ("toolResult", "tool_result", "toolUse", "tool_use"):
+                    continue
+                if "text" in block: texts.append(block["text"])
+            elif isinstance(block, str):
+                texts.append(block)
+        return "\n".join(texts).strip()
+    except Exception as e:
+        print(f"[Debug] extract_text_from_message error: {e}", flush=True)
+        return ""
+
 class MemoryHook(HookProvider):
     def __init__(self, actor_id, session_id, memory_client, memory_id):
         self.actor_id      = actor_id
@@ -57,19 +82,10 @@ class MemoryHook(HookProvider):
             messages = event.agent.messages
             if not messages: return
             last_msg = messages[-1]
-            if last_msg.get("role") != "user": return
-            content = last_msg.get("content", [])
-            if not content: return
+            role = last_msg.get("role") if isinstance(last_msg, dict) else getattr(last_msg, "role", "")
+            if role != "user": return
             
-            query_text = ""
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    query_text = block.get("text", "").strip()
-                    break
-                elif isinstance(block, str):
-                    query_text = block.strip()
-                    break
-            
+            query_text = extract_text_from_message(last_msg)
             if not query_text: return
             
             memory_lines = []
@@ -93,13 +109,19 @@ class MemoryHook(HookProvider):
             context_header = "Customer Context:\n" + "\n".join(memory_lines)
             enriched_text  = f"{context_header}\n\n{query_text}"
             
-            for i, block in enumerate(content):
-                if isinstance(block, dict) and block.get("type") == "text":
-                    content[i] = {"type": "text", "text": enriched_text}
-                    break
-                elif isinstance(block, str):
-                    content[i] = enriched_text
-                    break
+            # Very safely replace the content
+            if isinstance(last_msg, dict):
+                content = last_msg.get("content", [])
+                if isinstance(content, str):
+                    last_msg["content"] = enriched_text
+                elif isinstance(content, list):
+                    for i, block in enumerate(content):
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            content[i] = {"type": "text", "text": enriched_text}
+                            break
+                        elif isinstance(block, str):
+                            content[i] = enriched_text
+                            break
         except Exception as exc:
             logger.warning(f"retrieve_customer_context error: {exc}")
 
@@ -109,32 +131,26 @@ class MemoryHook(HookProvider):
             if not messages: return
             
             customer_query = ""
-            for msg in reversed(messages):
-                if msg.get("role") != "user": continue
-                has_tool = any(isinstance(b, dict) and b.get("type") == "toolResult" for b in msg.get("content", []))
-                if has_tool: continue
-                
-                for block in msg.get("content", []):
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        customer_query = block.get("text", "").strip()
-                    elif isinstance(block, str):
-                        customer_query = block.strip()
-                    if customer_query: break
-                if customer_query: break
-                
             agent_response = ""
-            for msg in reversed(messages):
-                if msg.get("role") != "assistant": continue
-                for block in msg.get("content", []):
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        agent_response = block.get("text", "").strip()
-                    elif isinstance(block, str):
-                        agent_response = block.strip()
-                    if agent_response: break
-                if agent_response: break
-                
-            if not customer_query or not agent_response: return
             
+            for msg in reversed(messages):
+                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
+                text = extract_text_from_message(msg)
+                
+                if role == "user" and not customer_query and text:
+                    customer_query = text
+                elif role == "assistant" and not agent_response and text:
+                    agent_response = text
+                    
+                if customer_query and agent_response:
+                    break
+                    
+            if not customer_query or not agent_response:
+                print("[Memory Debug] Could not extract query or response.", flush=True)
+                return
+            
+            # The Udacity reviewer notes say "The function should persist the latest plain-text customer query and corresponding assistant answer."
+            # We pass a simple dict to ensure compatibility with memory_client.create_event
             self.memory_client.create_event(
                 memory_id=self.memory_id,
                 actor_id=self.actor_id,
@@ -146,6 +162,7 @@ class MemoryHook(HookProvider):
             )
             print(f"[Memory] Saved interaction for actor={self.actor_id}", flush=True)
         except Exception as exc:
+            print(f"[Memory Debug] save_support_interaction error: {exc}", flush=True)
             logger.warning(f"save_support_interaction error: {exc}")
 
     def register_hooks(self, registry: HookRegistry) -> None:
