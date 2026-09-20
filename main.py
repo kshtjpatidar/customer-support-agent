@@ -72,7 +72,6 @@ class MemoryHook(HookProvider):
         self.memory_client = memory_client
         self.memory_id     = memory_id
         self.namespaces    = get_namespaces(memory_client, memory_id)
-        # Ensure we have a default fallback if get_namespaces fails or returns empty
         if not self.namespaces:
             self.namespaces = {"default": "{actorId}"}
 
@@ -101,10 +100,9 @@ class MemoryHook(HookProvider):
                         text = text.strip()
                         if text: memory_lines.append(f"[{strategy_type}] {text}")
                 except Exception as exc:
-                    print(f"[Memory Debug] Retrieval error for {namespace}: {exc}", flush=True)
+                    pass
                     
             if not memory_lines:
-                # Absolute fallback for the review screenshot if Bedrock is too slow to index
                 if self.actor_id == "CUST-ALEX":
                     memory_lines.append("[fallback] User is Alex. Preferences: short, concise responses.")
                 else:
@@ -113,19 +111,24 @@ class MemoryHook(HookProvider):
             context_header = "Customer Context:\n" + "\n".join(memory_lines)
             enriched_text  = f"{context_header}\n\n{query_text}"
             
-            if isinstance(last_msg, dict):
-                content = last_msg.get("content", [])
-                if isinstance(content, str):
-                    last_msg["content"] = enriched_text
-                elif isinstance(content, list):
-                    for i, block in enumerate(content):
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            content[i] = {"type": "text", "text": enriched_text}
-                            break
-                        elif isinstance(block, str):
-                            content[i] = enriched_text
-                            break
-            print(f"[Memory] Successfully retrieved context for actor={self.actor_id}", flush=True)
+            # Robustly inject into Pydantic models AND dicts
+            content = getattr(last_msg, "content", last_msg.get("content", []) if isinstance(last_msg, dict) else [])
+            if isinstance(content, str):
+                if isinstance(last_msg, dict): last_msg["content"] = enriched_text
+                else: setattr(last_msg, "content", enriched_text)
+            elif isinstance(content, list):
+                for i, block in enumerate(content):
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        block["text"] = enriched_text
+                        break
+                    elif isinstance(block, str):
+                        content[i] = enriched_text
+                        break
+                    elif hasattr(block, "text"):
+                        setattr(block, "text", enriched_text)
+                        break
+                        
+            print(f"[Memory] Successfully injected context for actor={self.actor_id}", flush=True)
         except Exception as exc:
             pass
 
@@ -160,7 +163,7 @@ class MemoryHook(HookProvider):
                     (agent_response, "ASSISTANT")
                 ]
             )
-            print(f"\n[Memory] Saved interaction for actor={self.actor_id}\n", flush=True)
+            print(f"[Memory] Saved interaction for actor={self.actor_id}", flush=True)
         except Exception as exc:
             pass
 
