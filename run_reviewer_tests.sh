@@ -1,7 +1,10 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────
-# AWS Final Evidence Runner (No Deploy)
+# AWS Final Evidence Runner (No Deploy, Path Fixed)
 # ─────────────────────────────────────────────────────────────
+
+# Fix the path so the `uv` command works
+export PATH="$HOME/.local/bin:$PATH"
 
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║   Udacity Final Evidence — AgentCore Invoke Tests    ║"
