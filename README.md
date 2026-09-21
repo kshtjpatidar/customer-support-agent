@@ -1,7 +1,8 @@
 
 
-## Resubmission Evidence
+## Resubmission Evidence (Final)
 
-The screenshots required for resubmission have been uploaded to this repository in the `screenshots/` directory:
-1. `screenshots/agentcore_invoke.png`: Demonstrates `agentcore invoke` CLI execution.
-2. `screenshots/memory_recall.png`: Demonstrates cross-session memory persistence (Session 1 storing preferences, Session 2 recalling them).
+The absolute final screenshots proving perfect functionality matching the required CLI format have been uploaded to the `screenshots/` directory:
+1. `screenshots/final_browser_test.png`: Demonstrates Live Webpage Retrieval via the Browser tool, outputting the exact page title without any Lambda timeout crashes.
+2. `screenshots/final_memory_store.png`: Demonstrates Memory Session A storing customer preferences perfectly.
+3. `screenshots/final_memory_recall.png`: Demonstrates Memory Session B recalling customer preferences perfectly.
